@@ -1,0 +1,27 @@
+# Gizmo's hands (src/worker/server.ts): a general Claude Code agent. Full node image (git,
+# python3, make, g++) plus the basics most tasks need; the agent apt/pip/npm-installs the rest.
+FROM node:22
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg python3-pip python3-venv fonts-noto-core fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+# Skills (on-demand how-tos the agent loads when a task needs them), pinned to a commit so a
+# change upstream can't silently change behaviour. Bump the SHA to update.
+ARG ANTHROPIC_SKILLS_SHA=2c5958ecac7cee2b583967a2c4981d0f4a75c579
+ARG REMOTION_SKILLS_SHA=7e541aa4d7361dfaca0780a565a47307eb7bdfbb
+RUN set -e; mkdir -p /root/.claude/skills; cd /tmp \
+    && fetch() { git init -q "$1" && git -C "$1" fetch -q --depth 1 "https://github.com/$2.git" "$3" && git -C "$1" checkout -q FETCH_HEAD; } \
+    && fetch a anthropics/skills "$ANTHROPIC_SKILLS_SHA" \
+    && for s in pdf docx xlsx pptx canvas-design algorithmic-art theme-factory slack-gif-creator frontend-design; do cp -r "a/skills/$s" /root/.claude/skills/; done \
+    && fetch r remotion-dev/skills "$REMOTION_SKILLS_SHA" \
+    && for s in remotion-best-practices remotion-create remotion-render remotion-captions remotion-multimedia remotion-markup remotion-maps remotion-docs; do cp -r "r/skills/$s" /root/.claude/skills/; done \
+    && rm -rf /tmp/a /tmp/r
+WORKDIR /worker
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile && yarn cache clean
+COPY tsconfig.json ./
+COPY src/worker ./src/worker
+COPY src/secret.ts ./src/secret.ts
+
+# Claude Code refuses bypassPermissions as root outside a sandbox; this container is the sandbox.
+ENV IS_SANDBOX=1
+CMD ["node_modules/.bin/tsx", "src/worker/server.ts"]

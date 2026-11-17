@@ -1,0 +1,9 @@
+node_modules
+data
+tests
+docs
+deploy
+.git
+*.log
+.env
+secrets/

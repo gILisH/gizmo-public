@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Gizmo backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15min
+# Catch up after the box was down at 03:30.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

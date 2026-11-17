@@ -1,0 +1,12 @@
+# The self-coding sandbox (src/coder/server.ts). Full node image: git + python/make/g++ so a
+# job can `yarn install` (native better-sqlite3) and run the test suite on its clone.
+FROM node:22
+WORKDIR /coder
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile && yarn cache clean
+COPY tsconfig.json ./
+COPY src/coder ./src/coder
+# The server runs as root (it alone reads the GitHub App key, mode 600 root); it runs Claude
+# Code, yarn install and the tests as the image's `node` user (uid 1000) — see server.ts AGENT.
+ENV IS_SANDBOX=1
+CMD ["node_modules/.bin/tsx", "src/coder/server.ts"]

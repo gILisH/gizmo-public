@@ -1,0 +1,109 @@
+services:
+  gizmo:
+    build: .
+    image: gizmo:latest # built once; search-ui reuses it
+    env_file: .env
+    environment:
+      # override .env's local paths for the container's mounted volume + service DNS
+      - GIZMO_DB_PATH=/data/gizmo.db
+      - GIZMO_MEMORY_DIR=/data/memory
+      - GIZMO_CREDS_DIR=/data/creds/dedicated
+      - GIZMO_PERSONAL_CREDS_DIR=/data/creds/personal
+      - GOOGLE_TOKEN_PATH=/data/creds/google.json
+      - GIZMO_OLLAMA_URL=http://ollama:11434
+    # gizmo is the ONLY service on every network: it calls the worker and the coder, they never
+    # see each other, search-ui or ollama. A prompt-injected sandbox reaches nothing but gizmo,
+    # which publishes no ports.
+    networks: [default, worker-net, coder-net]
+    volumes:
+      - ./data:/data # SQLite + Baileys creds + Google token + memory (the whole backup surface)
+      - ./SOUL.md:/app/SOUL.md # personality — mounted so tweaks need only rsync + restart, no rebuild
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    # outbound-only: no ports published
+
+  # Hand-search web UI. Reachable over the tailnet only (DO firewall blocks public
+  # inbound); binds the port on the host's interfaces incl. tailscale0.
+  search-ui:
+    image: gizmo:latest # same image as gizmo — no second build/export
+    pull_policy: never
+    command: ["npx", "tsx", "src/search-ui.ts"]
+    # NO env_file: only what it reads (config owner/number for the scope picker + its own key).
+    # Values come from .env via compose interpolation.
+    environment:
+      - GIZMO_DB_PATH=/data/gizmo.db
+      - GIZMO_OLLAMA_URL=http://ollama:11434
+      - GIZMO_EMBED_MODEL=${GIZMO_EMBED_MODEL:-bge-m3}
+      - GIZMO_UI_PORT=8899
+      - GIZMO_SEARCH_UI_KEY=${GIZMO_SEARCH_UI_KEY:-}
+      - GIZMO_DEDICATED_NUMBER=${GIZMO_DEDICATED_NUMBER:-}
+      - GIZMO_OWNERS=${GIZMO_OWNERS:-}
+      - GIZMO_OWNER_NAMES=${GIZMO_OWNER_NAMES:-}
+      - GIZMO_GOOGLE_OWNER=${GIZMO_GOOGLE_OWNER:-}
+    ports:
+      # Bind ONLY to the droplet's tailnet IP — never the public interface. So the UI
+      # is reachable only from devices on the tailnet, independent of the DO firewall.
+      - "${GIZMO_UI_BIND:-127.0.0.1}:8899:8899" # set GIZMO_UI_BIND to your tailnet IP
+    volumes:
+      - ./data:/data
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # Self-coding sandbox: opens PRs on the gizmo repo when the owner asks. Deliberately NO
+  # env_file, NO volumes, NO ports — only the Claude token + the GitHub App key (a read-only
+  # secret file that the gizmo container never sees).
+  coder:
+    build:
+      context: .
+      dockerfile: Dockerfile.coder
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - GIZMO_APP_ID=${GIZMO_APP_ID:-}
+      - GIZMO_CODER_SECRET=${GIZMO_CODER_SECRET:-} # its API refuses every request without it (gizmo gets it via .env)
+    secrets:
+      - github_app_key
+    networks: [coder-net] # gizmo only (+ internet)
+    restart: unless-stopped
+
+  # Gizmo's hands: a general Claude Code agent for tasks Gizmo's tools can't do (videos, files,
+  # scripts…). Internet + root to install anything, but NO env_file, NO secrets, NO /data,
+  # NO ports — only the Claude token. Capped so a heavy render can't starve Gizmo.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - GIZMO_WORKER_KEY=${GIZMO_WORKER_KEY:-} # gizmo presents it on every call; unset = API refuses all
+    networks: [worker-net] # gizmo only (+ internet); nothing calls out from here to gizmo
+    volumes:
+      - worker-work:/work # its work folders + the session id, so the conversation survives deploys
+      - worker-sessions:/root/.claude/projects # the conversation transcript itself
+      - worker-cache:/cache # npm/pip/browser downloads survive rebuilds
+    mem_limit: 3g
+    cpus: 3
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama # pulled models persist here
+    restart: unless-stopped
+    # not published either; only gizmo reaches it over the compose network
+
+networks:
+  default:
+  worker-net:
+  coder-net:
+
+volumes:
+  ollama-models:
+  worker-work:
+  worker-sessions:
+  worker-cache:
+
+secrets:
+  github_app_key:
+    file: ./secrets/github-app.pem # box-only; never in git or rsync

@@ -1,0 +1,13 @@
+[Unit]
+Description=Gizmo encrypted backup (SQLite snapshot + data/ + .env → restic on B2)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# systemd gives no HOME; restic keeps its cache under it.
+Environment=HOME=/root
+ExecStart=/root/gizmo/deploy/backup.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h

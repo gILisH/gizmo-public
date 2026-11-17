@@ -1,0 +1,11 @@
+[Unit]
+Description=Gizmo pull-based deploy (fast-forward to origin/main, rebuild)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# systemd gives no HOME; git needs it to read root's safe.directory (/root/gizmo is rsync-owned by uid 502).
+Environment=HOME=/root
+ExecStart=/root/gizmo/deploy/autodeploy.sh
+TimeoutStartSec=30min
